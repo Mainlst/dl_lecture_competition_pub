@@ -1,4 +1,4 @@
-import os, sys
+import os
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -8,9 +8,10 @@ from omegaconf import DictConfig
 import wandb
 from termcolor import cprint
 from tqdm import tqdm
+import torch.optim.lr_scheduler as lr_scheduler
 
 from src.datasets import ThingsMEGDataset
-from src.models import BasicConvClassifier
+from src.models import ResNet18
 from src.utils import set_seed
 
 
@@ -47,25 +48,29 @@ def run(args: DictConfig):
     # ------------------
     #       Model
     # ------------------
-    model = BasicConvClassifier(
-        train_set.num_classes, train_set.seq_len, train_set.num_channels
-    ).to(args.device)
+    model = ResNet18(train_set.num_classes, train_set.num_channels).to(args.device)
 
     # ------------------
     #     Optimizer
     # ------------------
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+
+    # 学習率スケジューラーの追加
+    scheduler = lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.1, patience=10, verbose=True
+    )
 
     # ------------------
     #   Start training
     # ------------------
     max_val_acc = 0
     patience = args.patience  # 早期終了のための忍耐力
-    epochs_no_improve = 1  # 改善が見られなかったエポック数
+    epochs_no_improve = 0  # 改善が見られなかったエポック数
     accuracy = Accuracy(
         task="multiclass", num_classes=train_set.num_classes, top_k=10
     ).to(args.device)
 
+    # Training loopの修正
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1}/{args.epochs}")
 
@@ -97,8 +102,9 @@ def run(args: DictConfig):
             val_loss.append(F.cross_entropy(y_pred, y).item())
             val_acc.append(accuracy(y_pred, y).item())
 
+        mean_val_acc = np.mean(val_acc)
         print(
-            f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}"
+            f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {mean_val_acc:.3f}"
         )
         torch.save(model.state_dict(), os.path.join(logdir, "model_last.pt"))
         if args.use_wandb:
@@ -107,14 +113,17 @@ def run(args: DictConfig):
                     "train_loss": np.mean(train_loss),
                     "train_acc": np.mean(train_acc),
                     "val_loss": np.mean(val_loss),
-                    "val_acc": np.mean(val_acc),
+                    "val_acc": mean_val_acc,
                 }
             )
 
-        if np.mean(val_acc) > max_val_acc:
+        # 学習率スケジューラーのステップ
+        scheduler.step(mean_val_acc)
+
+        if mean_val_acc > max_val_acc:
             cprint("New best.", "cyan")
             torch.save(model.state_dict(), os.path.join(logdir, "model_best.pt"))
-            max_val_acc = np.mean(val_acc)
+            max_val_acc = mean_val_acc
             epochs_no_improve = 0  # 改善があったのでリセット
         else:
             epochs_no_improve += 1  # 改善がなかったエポック数を増やす
@@ -133,11 +142,11 @@ def run(args: DictConfig):
 
     preds = []
     model.eval()
-    for X, subject_idxs in tqdm(test_loader, desc="Validation"):
+    for X, subject_idxs in tqdm(test_loader, desc="Test"):
         preds.append(model(X.to(args.device)).detach().cpu())
 
     preds = torch.cat(preds, dim=0).numpy()
-    np.save(os.path.join(logdir, "submission"), preds)
+    np.save(os.path.join(logdir, "submission.npy"), preds)
     cprint(f"Submission {preds.shape} saved at {logdir}", "cyan")
 
 
