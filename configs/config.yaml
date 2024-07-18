@@ -12,4 +12,4 @@ data_dir: data
 # Evaluation
 model_path: 
 
-patience: 2  # 早期終了のための忍耐力
+patience: 1  # 早期終了のための忍耐力
