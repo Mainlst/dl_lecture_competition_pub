@@ -1,6 +1,6 @@
-batch_size: 512
+batch_size: 237
 epochs: 80
-lr: 0.001
+lr: 0.0014154424538948096
 
 device: cuda:0
 num_workers: 4
@@ -12,4 +12,4 @@ data_dir: data
 # Evaluation
 model_path: 
 
-patience: 2  # 早期終了のための忍耐力
+patience: 1  # 早期終了のための忍耐力
